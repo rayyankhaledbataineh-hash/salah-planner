@@ -1,0 +1,7 @@
+credentials.json
+token.json
+.env
+node_modules
+dist
+salah-planner.log
+.claude/

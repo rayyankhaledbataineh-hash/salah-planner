@@ -1,0 +1,17 @@
+# Don't upload source or local-only files to Cloud Functions.
+# The deploy builds to dist/ first; GCP runs `npm install` server-side, so
+# node_modules is excluded too.
+node_modules/
+src/
+*.ts
+tsconfig.json
+
+# Secrets / local state — never upload these (they come from Secret Manager).
+token.json
+credentials.json
+.env
+
+# Local tooling / logs
+.claude/
+salah-planner.log
+.git/
