@@ -1,0 +1,35 @@
+name: Daily Prayer Times
+
+# Runs autonomously on GitHub's servers — no laptop required.
+on:
+  schedule:
+    # GitHub cron is always UTC. 08:00 UTC is ~2-3 AM in Houston (America/Chicago,
+    # shifts with DST). The exact time doesn't matter: each run just tops up a
+    # rolling 3-day window, so the schedule self-heals if a run is delayed/skipped.
+    - cron: '0 8 * * *'
+  # Lets you trigger a run manually from the Actions tab (used for first test).
+  workflow_dispatch:
+
+jobs:
+  schedule-prayers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx tsx src/runOnce.ts
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
+          # Location must be fixed: CI runners have no meaningful IP geolocation.
+          LATITUDE: '29.7604'
+          LONGITUDE: '-95.3698'
+          TIMEZONE: America/Chicago
+          DAYS_AHEAD: '3'

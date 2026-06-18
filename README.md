@@ -2,8 +2,8 @@
 
 Automatically keeps your Google Calendar populated with the five daily Islamic
 prayer windows (Fajr, Dhuhr, Asr, Maghrib, Isha), each with a 10-minute reminder.
-It runs **autonomously in the cloud** — no laptop required — and self-heals if a
-run is ever missed.
+It runs **autonomously in the cloud via GitHub Actions** — no laptop required —
+and self-heals if a run is ever missed.
 
 Each prayer is created as a *time window* (e.g. Fajr lasts from its start until
 sunrise) rather than a single point in time, so your calendar reflects when each
@@ -12,18 +12,17 @@ prayer is actually valid.
 ## How it works
 
 ```
-Cloud Scheduler ──daily POST──▶ Cloud Function ──▶ Aladhan API (prayer times)
-  (cron, 3 AM)   (OIDC auth)      (Node/TS)     └─▶ Google Calendar API (events)
-                                      ▲
-                                      └── secrets from Secret Manager
+GitHub Actions ──daily cron──▶ runOnce.ts ──▶ Aladhan API (prayer times)
+   (scheduled)                  (Node/TS)   └─▶ Google Calendar API (events)
+                                   ▲
+                                   └── credentials from encrypted GitHub secrets
 ```
 
-1. **Cloud Scheduler** fires a daily cron job, sending an authenticated (OIDC)
-   POST to the function.
-2. The **Cloud Function** authorizes to Google using a long-lived OAuth refresh
-   token (pulled from **Secret Manager**), fetches prayer times for a rolling
-   3-day window from the free [Aladhan API](https://aladhan.com/prayer-times-api),
-   and writes the events to the user's primary calendar.
+1. A **scheduled GitHub Actions workflow** runs once a day on GitHub's servers.
+2. It authorizes to Google using a long-lived OAuth refresh token (stored as an
+   encrypted **repository secret**), fetches prayer times for a rolling 3-day
+   window from the free [Aladhan API](https://aladhan.com/prayer-times-api), and
+   writes the events to the user's primary calendar.
 3. **Idempotency:** every event is tagged with a private extended property, so
    re-running never creates duplicates — it only fills in what's missing.
 4. **Self-healing:** because it schedules 3 days ahead, a single failed or
@@ -31,12 +30,12 @@ Cloud Scheduler ──daily POST──▶ Cloud Function ──▶ Aladhan API (
 
 The same code runs two ways:
 
-| | Local (`npm start`) | Cloud (`updatePrayerTimes`) |
+| | Local (`npm start`) | Cloud (GitHub Actions) |
 |---|---|---|
-| Entry point | `src/index.ts` | `src/cloudFunction.ts` |
-| Auth | interactive browser OAuth → `token.json` | refresh token from env (Secret Manager) |
+| Entry point | `src/index.ts` | `src/runOnce.ts` |
+| Auth | interactive browser OAuth → `token.json` | refresh token from env (GH secrets) |
 | Location | IP geolocation (or manual) | manual coords (required) |
-| Failure surfacing | macOS desktop notification | HTTP 500 + Cloud Logging |
+| Failure surfacing | macOS desktop notification | failed Actions run + logs |
 
 Both share the scheduling logic in `src/core.ts`, so behavior can't drift
 between environments.
@@ -44,8 +43,7 @@ between environments.
 ## Tech stack
 
 - **TypeScript** / Node.js 20
-- **Google Cloud Functions (gen2)** + **Cloud Scheduler** for serverless cron
-- **Secret Manager** for credential storage
+- **GitHub Actions** scheduled workflow for serverless daily execution
 - **Google Calendar API** (`googleapis`) with OAuth 2.0
 - **Aladhan API** for prayer-time calculation (ISNA method)
 - Resilience: exponential-backoff retry with jitter on all network calls
@@ -56,7 +54,7 @@ between environments.
 |---|---|
 | `src/core.ts` | Shared scheduling routine + log rotation |
 | `src/index.ts` | Local CLI entry point |
-| `src/cloudFunction.ts` | HTTP entry point for Cloud Functions |
+| `src/runOnce.ts` | Entry point for scheduled CI runs (GitHub Actions) |
 | `src/auth.ts` | OAuth: interactive (local) + env-based (cloud) |
 | `src/calendar.ts` | Builds prayer windows, idempotent event creation |
 | `src/prayerTimes.ts` | Aladhan API client |
@@ -64,7 +62,8 @@ between environments.
 | `src/retry.ts` | Generic retry-with-backoff helper |
 | `src/config.ts` | Centralized env-based configuration |
 | `src/dates.ts` | Timezone-aware date helpers |
-| `src/notify.ts` | Failure notifications (macOS / Cloud Logging) |
+| `src/notify.ts` | Failure notifications (macOS / logs) |
+| `.github/workflows/daily.yml` | The daily scheduled workflow |
 
 ## Local setup
 
@@ -77,82 +76,42 @@ The first run walks you through Google sign-in and saves a `token.json`. After
 that, `npm start` runs non-interactively. Optional config goes in a `.env`
 file — see `.env.example`.
 
-## Cloud deployment
+## Cloud deployment (GitHub Actions)
 
-Prerequisites: a GCP project with billing enabled, the `gcloud` CLI installed and
-authenticated, and the OAuth consent screen set to **"In production"** (so the
-refresh token doesn't expire after 7 days).
+The workflow in `.github/workflows/daily.yml` runs the planner daily. It needs
+three encrypted repository secrets:
 
-Enable the required APIs once:
+| Secret | Where to find it |
+|---|---|
+| `GOOGLE_CLIENT_ID` | `credentials.json` → `installed.client_id` |
+| `GOOGLE_CLIENT_SECRET` | `credentials.json` → `installed.client_secret` |
+| `GOOGLE_REFRESH_TOKEN` | `token.json` → `refresh_token` |
 
-```bash
-gcloud services enable \
-  cloudfunctions.googleapis.com run.googleapis.com \
-  cloudscheduler.googleapis.com secretmanager.googleapis.com \
-  cloudbuild.googleapis.com
-```
-
-### 1. Store credentials in Secret Manager
-
-Your `client_id` / `client_secret` are in `credentials.json` (under `installed`);
-your `refresh_token` is in `token.json`.
+Set them via the GitHub CLI (values are piped in, never printed):
 
 ```bash
-echo -n "YOUR_CLIENT_ID"     | gcloud secrets create google-client-id     --data-file=-
-echo -n "YOUR_CLIENT_SECRET" | gcloud secrets create google-client-secret --data-file=-
-echo -n "YOUR_REFRESH_TOKEN" | gcloud secrets create google-refresh-token --data-file=-
+gh secret set GOOGLE_CLIENT_ID
+gh secret set GOOGLE_CLIENT_SECRET
+gh secret set GOOGLE_REFRESH_TOKEN
 ```
 
-Grant the function's runtime service account access to read them (replace
-`PROJECT_NUMBER`):
+Or via the web UI: **Settings → Secrets and variables → Actions → New repository
+secret**.
 
-```bash
-for S in google-client-id google-client-secret google-refresh-token; do
-  gcloud secrets add-iam-policy-binding $S \
-    --member="serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
-    --role="roles/secretmanager.secretAccessor"
-done
-```
+Location is set directly in the workflow file (CI runners have no useful IP
+geolocation) — edit the `LATITUDE` / `LONGITUDE` / `TIMEZONE` env values in
+`daily.yml` to your own. The default is Houston, TX.
 
-### 2. Deploy
+Trigger a run manually from the **Actions** tab (the workflow has a
+`workflow_dispatch` trigger) to test, then check your Google Calendar.
 
-```bash
-npm run deploy -- \
-  --set-secrets="GOOGLE_CLIENT_ID=google-client-id:latest,GOOGLE_CLIENT_SECRET=google-client-secret:latest,GOOGLE_REFRESH_TOKEN=google-refresh-token:latest" \
-  --set-env-vars="LATITUDE=29.7604,LONGITUDE=-95.3698,TIMEZONE=America/Chicago"
-```
+> **Note:** GitHub disables scheduled workflows after 60 days of repository
+> inactivity. Any commit resets the clock.
 
-> **Location must be set manually in the cloud.** IP geolocation there returns
-> Google's data-center IP, not yours. The example uses Houston, TX.
-
-### 3. Schedule the daily run
-
-```bash
-# Service account the scheduler uses to invoke the function
-gcloud iam service-accounts create scheduler-invoker
-
-gcloud run services add-iam-policy-binding salah-planner \
-  --region=us-central1 \
-  --member="serviceAccount:scheduler-invoker@PROJECT_ID.iam.gserviceaccount.com" \
-  --role="roles/run.invoker"
-
-FUNCTION_URL=$(gcloud functions describe salah-planner --region=us-central1 --format="value(serviceConfig.uri)")
-
-gcloud scheduler jobs create http salah-planner-daily \
-  --schedule="0 3 * * *" \
-  --uri="$FUNCTION_URL" \
-  --http-method=POST \
-  --oidc-service-account-email="scheduler-invoker@PROJECT_ID.iam.gserviceaccount.com" \
-  --oidc-token-audience="$FUNCTION_URL" \
-  --time-zone="America/Chicago"
-```
-
-### 4. Test and observe
-
-```bash
-gcloud scheduler jobs run salah-planner-daily            # trigger now
-gcloud functions logs read salah-planner --region=us-central1
-```
+> **Alternative — GCP Cloud Functions:** the codebase also ships a Cloud
+> Functions entry point (`src/cloudFunction.ts`) and a `deploy` npm script, for
+> running this on Google Cloud + Cloud Scheduler instead. That path requires a
+> GCP billing account (free tier, but a card on file).
 
 ## Configuration reference
 
@@ -171,5 +130,9 @@ All configuration is environment-based (see `src/config.ts`).
 
 ## Cost
 
-Comfortably within GCP's always-free tier — roughly 30 invocations/month against
-free-tier allowances of millions. Effectively $0.
+Free. GitHub Actions gives unlimited minutes on public repos (and 2,000
+min/month free on private); this job uses ~1 minute per day.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
