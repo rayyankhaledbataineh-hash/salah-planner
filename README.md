@@ -1,13 +1,19 @@
 # Salah Planner
 
-Automatically keeps your Google Calendar populated with the five daily Islamic
-prayer windows (Fajr, Dhuhr, Asr, Maghrib, Isha), each with a 10-minute reminder.
-It runs **autonomously in the cloud via GitHub Actions** — no laptop required —
-and self-heals if a run is ever missed.
+Automatically keeps my Google Calendar populated with the five daily Islamic
+prayer windows (Fajr, Dhuhr, Asr, Maghrib, Isha), each with a 10-minute
+reminder. It runs on its own every day via GitHub Actions — no laptop required.
 
-Each prayer is created as a *time window* (e.g. Fajr lasts from its start until
-sunrise) rather than a single point in time, so your calendar reflects when each
-prayer is actually valid.
+## Why I built this
+
+As a student athlete, my days get packed fast — classes, practice, training,
+homework — and in the middle of all that it's easy for a prayer to slip by
+without me noticing until the window has passed. A regular calendar reminder
+never quite worked, because a prayer isn't a single point in time: each one is
+valid for a window (Fajr lasts from its start until sunrise, Dhuhr until Asr,
+and so on). So I built this to put each prayer on my calendar as the actual
+window it's valid in, and to keep doing that every day without me having to
+think about it.
 
 ## How it works
 
@@ -22,39 +28,32 @@ GitHub Actions ──daily cron──▶ runOnce.ts ──▶ Aladhan API (praye
 2. It authorizes to Google using a long-lived OAuth refresh token (stored as an
    encrypted **repository secret**), fetches prayer times for a rolling 3-day
    window from the free [Aladhan API](https://aladhan.com/prayer-times-api), and
-   writes the events to the user's primary calendar.
-3. **Idempotency:** every event is tagged with a private extended property, so
-   re-running never creates duplicates — it only fills in what's missing.
+   writes the events to my primary calendar.
+3. **No duplicates:** every event is tagged with a private extended property, so
+   re-running only fills in whatever is missing (idempotent).
 4. **Self-healing:** because it schedules 3 days ahead, a single failed or
    delayed run never leaves a gap in the calendar.
 
-The same code runs two ways:
-
-| | Local (`npm start`) | Cloud (GitHub Actions) |
-|---|---|---|
-| Entry point | `src/index.ts` | `src/runOnce.ts` |
-| Auth | interactive browser OAuth → `token.json` | refresh token from env (GH secrets) |
-| Location | IP geolocation (or manual) | manual coords (required) |
-| Failure surfacing | macOS desktop notification | failed Actions run + logs |
-
-Both share the scheduling logic in `src/core.ts`, so behavior can't drift
-between environments.
+The same code runs two ways — locally (`npm start`, with interactive browser
+OAuth) or in CI (`src/runOnce.ts`, with credentials from environment
+variables). Both share the scheduling logic in `src/core.ts`, so behavior
+can't drift between the two.
 
 ## Tech stack
 
 - **TypeScript** / Node.js 20
-- **GitHub Actions** scheduled workflow for serverless daily execution
+- **GitHub Actions** scheduled workflow for free serverless daily execution
 - **Google Calendar API** (`googleapis`) with OAuth 2.0
 - **Aladhan API** for prayer-time calculation (ISNA method)
-- Resilience: exponential-backoff retry with jitter on all network calls
+- Exponential-backoff retry with jitter on all network calls
 
 ## Project layout
 
 | File | Responsibility |
 |---|---|
-| `src/core.ts` | Shared scheduling routine + log rotation |
+| `src/core.ts` | Shared scheduling routine |
 | `src/index.ts` | Local CLI entry point |
-| `src/runOnce.ts` | Entry point for scheduled CI runs (GitHub Actions) |
+| `src/runOnce.ts` | Entry point for the daily GitHub Actions run |
 | `src/auth.ts` | OAuth: interactive (local) + env-based (cloud) |
 | `src/calendar.ts` | Builds prayer windows, idempotent event creation |
 | `src/prayerTimes.ts` | Aladhan API client |
@@ -72,9 +71,9 @@ npm install
 npm start          # first run opens a browser for OAuth, saves token.json
 ```
 
-The first run walks you through Google sign-in and saves a `token.json`. After
-that, `npm start` runs non-interactively. Optional config goes in a `.env`
-file — see `.env.example`.
+The first run walks you through Google sign-in and saves a `token.json`; after
+that it runs non-interactively. Optional settings (fixed coordinates, timezone,
+days ahead) go in a `.env` file — see `.env.example` and `src/config.ts`.
 
 ## Cloud deployment (GitHub Actions)
 
@@ -87,51 +86,19 @@ three encrypted repository secrets:
 | `GOOGLE_CLIENT_SECRET` | `credentials.json` → `installed.client_secret` |
 | `GOOGLE_REFRESH_TOKEN` | `token.json` → `refresh_token` |
 
-Set them via the GitHub CLI (values are piped in, never printed):
+Set them under **Settings → Secrets and variables → Actions**, or with the
+GitHub CLI (`gh secret set NAME` — values are piped in, never printed).
 
-```bash
-gh secret set GOOGLE_CLIENT_ID
-gh secret set GOOGLE_CLIENT_SECRET
-gh secret set GOOGLE_REFRESH_TOKEN
-```
-
-Or via the web UI: **Settings → Secrets and variables → Actions → New repository
-secret**.
-
-Location is set directly in the workflow file (CI runners have no useful IP
-geolocation) — edit the `LATITUDE` / `LONGITUDE` / `TIMEZONE` env values in
-`daily.yml` to your own. The default is Houston, TX.
-
-Trigger a run manually from the **Actions** tab (the workflow has a
-`workflow_dispatch` trigger) to test, then check your Google Calendar.
+Location is set directly in the workflow file, since CI runners have no useful
+IP geolocation — edit the `LATITUDE` / `LONGITUDE` / `TIMEZONE` values in
+`daily.yml`. To test, trigger a run manually from the **Actions** tab, then
+check your calendar.
 
 > **Note:** GitHub disables scheduled workflows after 60 days of repository
-> inactivity. Any commit resets the clock.
+> inactivity; any commit resets the clock.
 
-> **Alternative — GCP Cloud Functions:** the codebase also ships a Cloud
-> Functions entry point (`src/cloudFunction.ts`) and a `deploy` npm script, for
-> running this on Google Cloud + Cloud Scheduler instead. That path requires a
-> GCP billing account (free tier, but a card on file).
-
-## Configuration reference
-
-All configuration is environment-based (see `src/config.ts`).
-
-| Variable | Used in | Default | Purpose |
-|---|---|---|---|
-| `GOOGLE_CLIENT_ID` | cloud | — | OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | cloud | — | OAuth client secret |
-| `GOOGLE_REFRESH_TOKEN` | cloud | — | Long-lived OAuth refresh token |
-| `LATITUDE` / `LONGITUDE` | both | IP geolocation | Fixed coordinates (required in cloud) |
-| `TIMEZONE` | both | system / IP | IANA timezone, e.g. `America/Chicago` |
-| `DAYS_AHEAD` | both | `3` | Rolling window size |
-| `GOOGLE_CREDENTIALS_PATH` | local | `./credentials.json` | OAuth app credentials |
-| `GOOGLE_TOKEN_PATH` | local | `./token.json` | Cached OAuth token |
-
-## Cost
-
-Free. GitHub Actions gives unlimited minutes on public repos (and 2,000
-min/month free on private); this job uses ~1 minute per day.
+Running this costs nothing: GitHub Actions is free for public repos, and the
+job uses about a minute a day.
 
 ## License
 
