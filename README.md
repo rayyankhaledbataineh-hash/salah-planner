@@ -58,7 +58,7 @@ can't drift between the two.
 | `src/index.ts` | Local CLI entry point |
 | `src/runOnce.ts` | Entry point for the daily GitHub Actions run |
 | `src/auth.ts` | OAuth: interactive (local) + env-based (cloud) |
-| `src/calendar.ts` | Builds prayer windows, idempotent event creation |
+| `src/calendar.ts` | Builds prayer windows; idempotent, location-aware event creation |
 | `src/prayerTimes.ts` | Aladhan API client |
 | `src/location.ts` | IP geolocation with manual override |
 | `src/retry.ts` | Generic retry-with-backoff helper |
