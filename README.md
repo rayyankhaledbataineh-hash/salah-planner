@@ -6,14 +6,13 @@ reminder. It runs on its own every day via GitHub Actions — no laptop required
 
 ## Why I built this
 
-As a student athlete, my days get packed fast — classes, practice, training,
-homework — and in the middle of all that it's easy for a prayer to slip by
-without me noticing until the window has passed. A regular calendar reminder
-never quite worked, because a prayer isn't a single point in time: each one is
-valid for a window (Fajr lasts from its start until sunrise, Dhuhr until Asr,
-and so on). So I built this to put each prayer on my calendar as the actual
-window it's valid in, and to keep doing that every day without me having to
-think about it.
+As a Muslim student athlete, my schedule can get a little busy, whether it's
+class, practice, or workouts. As a result, I would sometimes overlook my
+prayers. In an effort to combat this, I built this tool that adds the
+windows/time frames of the 5 daily prayers onto Google Calendar every day. So
+alongside my daily events for the day on Google Calendar, I can now also see
+my daily prayers, so that when I plan for the day I can take my prayers into
+account.
 
 ## How it works
 
