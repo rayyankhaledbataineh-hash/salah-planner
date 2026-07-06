@@ -30,7 +30,7 @@ export async function schedulePrayers(auth: OAuth2Client): Promise<string> {
       location.longitude,
       date
     );
-    await createPrayerEvents(auth, timings, timezone, date);
+    await createPrayerEvents(auth, timings, timezone, date, location);
   }
 
   return `Scheduled prayers for ${DAYS_AHEAD} day(s) starting ${today} (${location.timezone}).`;

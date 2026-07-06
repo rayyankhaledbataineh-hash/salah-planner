@@ -10,6 +10,12 @@ const REMINDER_MINUTES = 10;
 // events and avoid creating duplicates.
 const TAG_KEY = 'salahPlanner';
 
+// Each event also stores the coordinates it was scheduled for. If the current
+// location is farther than this from those coordinates, the event's times are
+// wrong for where the user actually is, so it gets deleted and rescheduled.
+// 50 km is well past IP-geolocation jitter but catches any real relocation.
+const RELOCATE_KM = 50;
+
 // Each prayer's valid window runs from its start time until the next boundary.
 // Fajr ends at Sunrise; Isha ends at midnight (00:00) so it doesn't spill onto
 // the next day's calendar view. 'MIDNIGHT' is a sentinel handled below.
@@ -27,27 +33,55 @@ const WINDOWS: PrayerWindow[] = [
   { name: 'Isha', start: 'Isha', end: 'MIDNIGHT' },
 ];
 
+/** An already-created event for one prayer, with where it was scheduled for. */
+interface ScheduledEvent {
+  id: string;
+  latitude?: number;
+  longitude?: number;
+}
+
 /**
  * Creates one calendar event per prayer window on the user's primary calendar
  * for the given day (`date` is "YYYY-MM-DD"). Re-running is safe: prayers
- * already scheduled for that day are skipped.
+ * already scheduled for that day are skipped — unless they were scheduled for
+ * a different location (beyond RELOCATE_KM), in which case they are deleted
+ * and recreated with times for the current coordinates.
  */
 export async function createPrayerEvents(
   auth: OAuth2Client,
   timings: PrayerTimings,
   timeZone: string,
-  date: string
+  date: string,
+  coords: { latitude: number; longitude: number }
 ): Promise<void> {
   const calendar = google.calendar({ version: 'v3', auth });
   const today = date; // the day we're scheduling
   const tomorrow = addDays(today, 1);
 
-  const alreadyScheduled = await getScheduledPrayers(calendar, today);
+  const existing = await getScheduledPrayers(calendar, today);
 
   for (const w of WINDOWS) {
-    if (alreadyScheduled.has(w.name)) {
-      console.log(`• ${today} ${w.name} already scheduled — skipping.`);
-      continue;
+    const prev = existing.get(w.name);
+    if (prev) {
+      // Events created by older versions have no stored coordinates; leave
+      // those alone rather than churn the whole calendar on upgrade.
+      const moved =
+        prev.latitude != null &&
+        prev.longitude != null &&
+        kmBetween(prev.latitude, prev.longitude, coords.latitude, coords.longitude) >
+          RELOCATE_KM;
+
+      if (!moved) {
+        console.log(`• ${today} ${w.name} already scheduled — skipping.`);
+        continue;
+      }
+
+      await withRetry(() =>
+        calendar.events.delete({ calendarId: 'primary', eventId: prev.id })
+      );
+      console.log(
+        `↻ ${today} ${w.name} was scheduled for another location — rescheduling.`
+      );
     }
 
     const startTime = cleanTime(timings[w.start]); // "HH:MM"
@@ -77,7 +111,12 @@ export async function createPrayerEvents(
             overrides: [{ method: 'popup', minutes: REMINDER_MINUTES }],
           },
           extendedProperties: {
-            private: { [TAG_KEY]: today, prayer: w.name },
+            private: {
+              [TAG_KEY]: today,
+              prayer: w.name,
+              lat: coords.latitude.toFixed(4),
+              lng: coords.longitude.toFixed(4),
+            },
           },
         },
       })
@@ -88,13 +127,14 @@ export async function createPrayerEvents(
 }
 
 /**
- * Returns the set of prayers we have already created events for on `dateKey`,
- * identified by our private tag.
+ * Returns the events we have already created for `dateKey`, keyed by prayer
+ * name and identified by our private tag, including the coordinates each one
+ * was scheduled for (absent on events created by older versions).
  */
 async function getScheduledPrayers(
   calendar: ReturnType<typeof google.calendar>,
   dateKey: string
-): Promise<Set<string>> {
+): Promise<Map<string, ScheduledEvent>> {
   const res = await withRetry(() =>
     calendar.events.list({
       calendarId: 'primary',
@@ -103,12 +143,36 @@ async function getScheduledPrayers(
     })
   );
 
-  const scheduled = new Set<string>();
+  const scheduled = new Map<string, ScheduledEvent>();
   for (const event of res.data.items ?? []) {
-    const prayer = event.extendedProperties?.private?.prayer;
-    if (prayer) scheduled.add(prayer);
+    const props = event.extendedProperties?.private;
+    const prayer = props?.prayer;
+    if (!prayer || !event.id) continue;
+
+    scheduled.set(prayer, {
+      id: event.id,
+      latitude: props.lat ? Number(props.lat) : undefined,
+      longitude: props.lng ? Number(props.lng) : undefined,
+    });
   }
   return scheduled;
+}
+
+/** Great-circle (haversine) distance between two coordinates, in km. */
+function kmBetween(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const earthRadiusKm = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * earthRadiusKm * Math.asin(Math.sqrt(a));
 }
 
 /**

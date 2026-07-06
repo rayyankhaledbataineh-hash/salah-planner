@@ -30,8 +30,12 @@ GitHub Actions ──daily cron──▶ runOnce.ts ──▶ Aladhan API (praye
    writes the events to my primary calendar.
 3. **No duplicates:** every event is tagged with a private extended property, so
    re-running only fills in whatever is missing (idempotent).
-4. **Self-healing:** because it schedules 3 days ahead, a single failed or
+4. **Self-healing:** because it schedules a few days ahead, a single failed or
    delayed run never leaves a gap in the calendar.
+5. **Location-aware:** every event stores the coordinates it was scheduled
+   for. If a later run detects you've moved (more than ~50 km), upcoming
+   events still in the window are automatically deleted and rescheduled with
+   the new location's times — no manual cleanup.
 
 The same code runs two ways — locally (`npm start`, with interactive browser
 OAuth) or in CI (`src/runOnce.ts`, with credentials from environment
@@ -88,10 +92,21 @@ three encrypted repository secrets:
 Set them under **Settings → Secrets and variables → Actions**, or with the
 GitHub CLI (`gh secret set NAME` — values are piped in, never printed).
 
-Location is set directly in the workflow file, since CI runners have no useful
-IP geolocation — edit the `LATITUDE` / `LONGITUDE` / `TIMEZONE` values in
-`daily.yml`. To test, trigger a run manually from the **Actions** tab, then
-check your calendar.
+Location and window size are read from **repository variables** — set them
+under **Settings → Secrets and variables → Actions → Variables** (`LATITUDE`,
+`LONGITUDE`, `TIMEZONE`, `DAYS_AHEAD`). Anything unset falls back to the
+defaults in `daily.yml`. CI runners need explicit coordinates because IP
+geolocation there would return GitHub's datacenter, not you.
+
+- **Moved cities?** Update the three location variables — no code change. The
+  next run notices the upcoming events were scheduled for somewhere else and
+  reschedules them automatically.
+- **Want more (or fewer) days on your calendar?** Set `DAYS_AHEAD` to taste:
+  `1` schedules just today, `7` keeps a full week visible. It's pure
+  preference — the rolling window tops itself up either way.
+
+To test, trigger a run manually from the **Actions** tab, then check your
+calendar.
 
 > **Note:** GitHub disables scheduled workflows after 60 days of repository
 > inactivity; any commit resets the clock.

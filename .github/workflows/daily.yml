@@ -29,7 +29,12 @@ jobs:
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
           # Location must be fixed: CI runners have no meaningful IP geolocation.
-          LATITUDE: '29.7604'
-          LONGITUDE: '-95.3698'
-          TIMEZONE: America/Chicago
-          DAYS_AHEAD: '3'
+          # Set via repository variables (Settings → Secrets and variables →
+          # Actions → Variables) so moving or resizing the window never needs a
+          # code change; the values after || are fallback defaults (Houston, TX).
+          # After changing location, the next run automatically reschedules any
+          # upcoming events that were created for the old coordinates.
+          LATITUDE: ${{ vars.LATITUDE || '29.7604' }}
+          LONGITUDE: ${{ vars.LONGITUDE || '-95.3698' }}
+          TIMEZONE: ${{ vars.TIMEZONE || 'America/Chicago' }}
+          DAYS_AHEAD: ${{ vars.DAYS_AHEAD || '3' }}
