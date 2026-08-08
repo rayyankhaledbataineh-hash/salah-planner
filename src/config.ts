@@ -35,6 +35,16 @@ export const LONGITUDE = process.env.LONGITUDE
 /** IANA timezone override (e.g. "America/Chicago"). Used with fixed coords. */
 export const TIMEZONE = process.env.TIMEZONE ?? undefined;
 
+/**
+ * Persisted "current location" for the autonomous cloud job. The phone Shortcut
+ * updates this (via a manual workflow run) whenever you move, and the daily
+ * scheduled run reuses it — so location stays hands-off without hardcoding
+ * coordinates anywhere. Missing/invalid is fine: getLocation() falls back to IP
+ * geolocation. See src/location.ts and src/updateLocation.ts.
+ */
+export const LOCATION_FILE =
+  process.env.LOCATION_FILE ?? path.resolve(__dirname, '..', 'location.json');
+
 /** Path to the log file (for rotation). */
 export const LOG_PATH =
   process.env.LOG_PATH ?? path.resolve(__dirname, '..', 'salah-planner.log');

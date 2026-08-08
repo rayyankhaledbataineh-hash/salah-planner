@@ -32,10 +32,14 @@ GitHub Actions ──daily cron──▶ runOnce.ts ──▶ Aladhan API (praye
    re-running only fills in whatever is missing (idempotent).
 4. **Self-healing:** because it schedules a few days ahead, a single failed or
    delayed run never leaves a gap in the calendar.
-5. **Location-aware:** every event stores the coordinates it was scheduled
-   for. If a later run detects you've moved (more than ~50 km), upcoming
-   events still in the window are automatically deleted and rescheduled with
-   the new location's times — no manual cleanup.
+5. **Location-aware, hands-off:** the current location lives in a committed
+   `location.json`, so the daily run never needs coordinates typed in. When I
+   travel, one tap of an iOS Shortcut sends my phone's GPS to the workflow,
+   which updates that file. Every event also stores the coordinates it was
+   scheduled for, so the next run notices the move (more than ~50 km) and
+   automatically deletes and reschedules the upcoming events with the new
+   location's times — no manual cleanup. GPS is only ever read when I tap the
+   Shortcut; nothing tracks me in the background.
 
 The same code runs two ways — locally (`npm start`, with interactive browser
 OAuth) or in CI (`src/runOnce.ts`, with credentials from environment
@@ -60,7 +64,9 @@ can't drift between the two.
 | `src/auth.ts` | OAuth: interactive (local) + env-based (cloud) |
 | `src/calendar.ts` | Builds prayer windows; idempotent, location-aware event creation |
 | `src/prayerTimes.ts` | Aladhan API client |
-| `src/location.ts` | IP geolocation with manual override |
+| `src/location.ts` | Resolves location: env override → `location.json` → IP |
+| `src/updateLocation.ts` | Writes `location.json` from GPS sent by the phone Shortcut |
+| `location.json` | Committed current location the daily run reuses |
 | `src/retry.ts` | Generic retry-with-backoff helper |
 | `src/config.ts` | Centralized env-based configuration |
 | `src/dates.ts` | Timezone-aware date helpers |
@@ -92,21 +98,50 @@ three encrypted repository secrets:
 Set them under **Settings → Secrets and variables → Actions**, or with the
 GitHub CLI (`gh secret set NAME` — values are piped in, never printed).
 
-Location and window size are read from **repository variables** — set them
-under **Settings → Secrets and variables → Actions → Variables** (`LATITUDE`,
-`LONGITUDE`, `TIMEZONE`, `DAYS_AHEAD`). Anything unset falls back to the
-defaults in `daily.yml`. CI runners need explicit coordinates because IP
-geolocation there would return GitHub's datacenter, not you.
+**Location** lives in the committed `location.json`. The daily run reads it, so
+CI never has to guess (IP geolocation on a runner would return GitHub's
+datacenter, not me). Window size stays configurable via the `DAYS_AHEAD`
+**repository variable** (Settings → Secrets and variables → Actions →
+Variables); unset falls back to the default in `daily.yml`.
 
-- **Moved cities?** Update the three location variables — no code change. The
-  next run notices the upcoming events were scheduled for somewhere else and
-  reschedules them automatically.
+- **Moved cities?** One tap of the iOS Shortcut below sends your GPS to the
+  workflow, which updates `location.json` and reschedules the upcoming events
+  automatically. You can also do it by hand: **Actions → Daily Prayer Times →
+  Run workflow**, and enter a latitude/longitude.
 - **Want more (or fewer) days on your calendar?** Set `DAYS_AHEAD` to taste:
   `1` schedules just today, `7` keeps a full week visible. It's pure
   preference — the rolling window tops itself up either way.
 
 To test, trigger a run manually from the **Actions** tab, then check your
 calendar.
+
+### One-tap location from your phone
+
+An iOS Shortcut keeps location hands-off: tap it after you land somewhere new
+and it sends your current GPS to the workflow. Nothing runs in the background —
+GPS is only read on that tap, and only the latest location is stored.
+
+1. Create a **fine-grained personal access token** (GitHub → Settings →
+   Developer settings → Fine-grained tokens) scoped to this repo, with the
+   **Actions** permission set to **Read and write**. Copy it.
+2. In the iOS **Shortcuts** app, create a shortcut with these actions:
+   - **Get Current Location**
+   - **Get Details of Location** → Latitude (save as a variable)
+   - **Get Details of Location** → Longitude (save as a variable)
+   - **Get Contents of URL**:
+     - URL: `https://api.github.com/repos/<owner>/salah-planner/actions/workflows/daily.yml/dispatches`
+     - Method: **POST**
+     - Headers: `Accept: application/vnd.github+json`,
+       `Authorization: Bearer <YOUR_TOKEN>`
+     - Request Body (JSON):
+       ```json
+       { "ref": "main", "inputs": { "latitude": "<Latitude>", "longitude": "<Longitude>" } }
+       ```
+       (drop the Latitude/Longitude variables into the string fields)
+3. Add it to your Home Screen. Tapping it triggers a run that reschedules your
+   prayers for wherever you are. A `204 No Content` response means success.
+
+The token lives only in the Shortcut on your phone, never in this repo.
 
 > **Note:** GitHub disables scheduled workflows after 60 days of repository
 > inactivity; any commit resets the clock.

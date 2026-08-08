@@ -3,12 +3,25 @@ name: Daily Prayer Times
 # Runs autonomously on GitHub's servers — no laptop required.
 on:
   schedule:
-    # GitHub cron is always UTC. 08:00 UTC is ~2-3 AM in Houston (America/Chicago,
-    # shifts with DST). The exact time doesn't matter: each run just tops up a
-    # rolling 3-day window, so the schedule self-heals if a run is delayed/skipped.
+    # GitHub cron is always UTC. 08:00 UTC is ~2-3 AM in the US (shifts with DST).
+    # The exact time doesn't matter: each run just tops up a rolling 3-day
+    # window, so the schedule self-heals if a run is delayed/skipped.
     - cron: '0 8 * * *'
-  # Lets you trigger a run manually from the Actions tab (used for first test).
+  # Lets you trigger a run manually — from the Actions tab, or from the phone
+  # Shortcut, which sends your current GPS as the latitude/longitude inputs.
+  # Leave both blank to just re-run with the current saved location.
   workflow_dispatch:
+    inputs:
+      latitude:
+        description: 'Latitude (blank = keep current location)'
+        required: false
+      longitude:
+        description: 'Longitude (blank = keep current location)'
+        required: false
+
+# Needed so a location update can be committed back to the repo.
+permissions:
+  contents: write
 
 jobs:
   schedule-prayers:
@@ -23,18 +36,35 @@ jobs:
 
       - run: npm ci
 
-      - run: npx tsx src/runOnce.ts
+      # When the Shortcut (or a manual run) provides coordinates, persist them as
+      # the new current location and commit the change, so every later scheduled
+      # run reuses this location until the next time you move. The commit also
+      # resets GitHub's 60-day scheduled-workflow inactivity timer for free.
+      - name: Update saved location
+        if: >-
+          ${{ github.event_name == 'workflow_dispatch'
+              && github.event.inputs.latitude != ''
+              && github.event.inputs.longitude != '' }}
+        env:
+          LOCATION_LAT: ${{ github.event.inputs.latitude }}
+          LOCATION_LNG: ${{ github.event.inputs.longitude }}
+        run: |
+          npx tsx src/updateLocation.ts
+          if ! git diff --quiet -- location.json; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add location.json
+            git commit -m "Update saved location [skip ci]"
+            git push
+          fi
+
+      # Location now comes from the committed location.json (see the step above
+      # and src/location.ts), so no coordinates are hardcoded here. Only the
+      # window size stays configurable via a repository variable.
+      - name: Schedule prayers
+        run: npx tsx src/runOnce.ts
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           GOOGLE_REFRESH_TOKEN: ${{ secrets.GOOGLE_REFRESH_TOKEN }}
-          # Location must be fixed: CI runners have no meaningful IP geolocation.
-          # Set via repository variables (Settings → Secrets and variables →
-          # Actions → Variables) so moving or resizing the window never needs a
-          # code change; the values after || are fallback defaults (Houston, TX).
-          # After changing location, the next run automatically reschedules any
-          # upcoming events that were created for the old coordinates.
-          LATITUDE: ${{ vars.LATITUDE || '29.7604' }}
-          LONGITUDE: ${{ vars.LONGITUDE || '-95.3698' }}
-          TIMEZONE: ${{ vars.TIMEZONE || 'America/Chicago' }}
           DAYS_AHEAD: ${{ vars.DAYS_AHEAD || '3' }}
