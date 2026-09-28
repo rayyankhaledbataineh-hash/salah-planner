@@ -4,7 +4,10 @@ import { PrayerTimings } from './prayerTimes';
 import { addDays } from './dates';
 import { withRetry } from './retry';
 
-const REMINDER_MINUTES = 10;
+const REMINDER_MINUTES = 20;
+
+// Google Calendar event colour. "9" is Blueberry.
+const EVENT_COLOR_ID = '9';
 
 // Tag attached to every event we create, so re-runs can recognise our own
 // events and avoid creating duplicates.
@@ -15,6 +18,11 @@ const TAG_KEY = 'salahPlanner';
 // wrong for where the user actually is, so it gets deleted and rescheduled.
 // 50 km is well past IP-geolocation jitter but catches any real relocation.
 const RELOCATE_KM = 50;
+
+const REMINDERS = {
+  useDefault: false,
+  overrides: [{ method: 'popup', minutes: REMINDER_MINUTES }],
+};
 
 // Each prayer's valid window runs from its start time until the next boundary.
 // Fajr ends at Sunrise; Isha ends at midnight (00:00) so it doesn't spill onto
@@ -38,6 +46,8 @@ interface ScheduledEvent {
   id: string;
   latitude?: number;
   longitude?: number;
+  /** True if the event's colour or reminder differs from the current settings. */
+  outdated: boolean;
 }
 
 /**
@@ -72,7 +82,20 @@ export async function createPrayerEvents(
           RELOCATE_KM;
 
       if (!moved) {
-        console.log(`• ${today} ${w.name} already scheduled — skipping.`);
+        if (prev.outdated) {
+          // Created before the colour/reminder settings changed: bring it up
+          // to date in place rather than recreating it.
+          await withRetry(() =>
+            calendar.events.patch({
+              calendarId: 'primary',
+              eventId: prev.id,
+              requestBody: { colorId: EVENT_COLOR_ID, reminders: REMINDERS },
+            })
+          );
+          console.log(`✎ ${today} ${w.name} updated colour/reminder.`);
+        } else {
+          console.log(`• ${today} ${w.name} already scheduled — skipping.`);
+        }
         continue;
       }
 
@@ -106,10 +129,8 @@ export async function createPrayerEvents(
           summary: w.name,
           start: { dateTime: `${today}T${startTime}:00`, timeZone },
           end: { dateTime: `${endDate}T${endTime}:00`, timeZone },
-          reminders: {
-            useDefault: false,
-            overrides: [{ method: 'popup', minutes: REMINDER_MINUTES }],
-          },
+          colorId: EVENT_COLOR_ID,
+          reminders: REMINDERS,
           extendedProperties: {
             private: {
               [TAG_KEY]: today,
@@ -149,10 +170,18 @@ async function getScheduledPrayers(
     const prayer = props?.prayer;
     if (!prayer || !event.id) continue;
 
+    const overrides = event.reminders?.overrides ?? [];
+    const reminderOk =
+      event.reminders?.useDefault === false &&
+      overrides.length === 1 &&
+      overrides[0].method === 'popup' &&
+      overrides[0].minutes === REMINDER_MINUTES;
+
     scheduled.set(prayer, {
       id: event.id,
       latitude: props.lat ? Number(props.lat) : undefined,
       longitude: props.lng ? Number(props.lng) : undefined,
+      outdated: event.colorId !== EVENT_COLOR_ID || !reminderOk,
     });
   }
   return scheduled;
