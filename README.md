@@ -1,7 +1,7 @@
 # Salah Planner
 
 Automatically keeps my Google Calendar populated with the five daily Islamic
-prayer windows (Fajr, Dhuhr, Asr, Maghrib, Isha), each with a 10-minute
+prayer windows (Fajr, Dhuhr, Asr, Maghrib, Isha), each with a 20-minute
 reminder. It runs on its own every day via GitHub Actions — no laptop required.
 
 ## Why I built this
